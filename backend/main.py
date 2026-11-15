@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 import psycopg
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,27 +16,48 @@ app = FastAPI(title="FluentLoop")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
 
+VALID_LEVELS = ("A1", "A2", "B1", "B2", "C1", "C2")
 SESSION_COOKIE = "fluentloop_session"
 SESSION_DAYS = 7
 SESSION_SECONDS = SESSION_DAYS * 24 * 60 * 60
 DUMMY_PASSWORD_HASH = hash_password("not-a-real-user-password")
 
+
 class AuthInput(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
 
+
 class UserOutput(BaseModel):
     id: int
     email: EmailStr
+    xp: int = 0
+    streak_days: int = 0
+
+
+class SwipeInput(BaseModel):
+    status: Literal["known", "learning"]
+
 
 def normalized_email(email: EmailStr) -> str:
     return str(email).strip().lower()
+
+
+def validate_level(level: str) -> str:
+    clean = level.strip().upper()
+    if clean not in VALID_LEVELS:
+        raise HTTPException(400, "Invalid CEFR level")
+    return clean
+
 
 def create_session(connection, user_id: int) -> str:
     raw_token = generate_session_token()
@@ -52,6 +74,7 @@ def create_session(connection, user_id: int) -> str:
     )
     return raw_token
 
+
 def set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         key=SESSION_COOKIE,
@@ -62,6 +85,7 @@ def set_session_cookie(response: Response, token: str) -> None:
         secure=False,
         path="/",
     )
+
 
 def current_user(request: Request):
     raw_token = request.cookies.get(SESSION_COOKIE)
@@ -74,7 +98,7 @@ def current_user(request: Request):
         with get_connection() as connection:
             user = connection.execute(
                 """
-                SELECT users.id, users.email
+                SELECT users.id, users.email, users.xp, users.streak_days
                 FROM sessions
                          JOIN users ON users.id = sessions.user_id
                 WHERE sessions.token_hash = %s
@@ -92,6 +116,7 @@ def current_user(request: Request):
         )
     return user
 
+
 @app.get("/health")
 def health():
     try:
@@ -100,6 +125,7 @@ def health():
     except (psycopg.Error, RuntimeError):
         raise HTTPException(503, "Database unavailable") from None
     return {"status": "ok", "database": "connected"}
+
 
 @app.post(
     "/auth/register",
@@ -114,7 +140,7 @@ def register(payload: AuthInput, response: Response):
                 """
                 INSERT INTO users (email, password_hash)
                 VALUES (%s, %s)
-                    RETURNING id, email
+                    RETURNING id, email, xp, streak_days
                 """,
                 (email, hash_password(payload.password)),
             ).fetchone()
@@ -127,6 +153,7 @@ def register(payload: AuthInput, response: Response):
     set_session_cookie(response, session_token)
     return user
 
+
 @app.post("/auth/login", response_model=UserOutput)
 def login(payload: AuthInput, response: Response):
     email = normalized_email(payload.email)
@@ -134,7 +161,7 @@ def login(payload: AuthInput, response: Response):
         with get_connection() as connection:
             user = connection.execute(
                 """
-                SELECT id, email, password_hash
+                SELECT id, email, password_hash, xp, streak_days
                 FROM users
                 WHERE email = %s
                 """,
@@ -154,7 +181,13 @@ def login(payload: AuthInput, response: Response):
         raise HTTPException(503, "Database unavailable") from None
 
     set_session_cookie(response, session_token)
-    return {"id": user["id"], "email": user["email"]}
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "xp": user["xp"],
+        "streak_days": user["streak_days"],
+    }
+
 
 @app.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(request: Request, response: Response):
@@ -176,6 +209,113 @@ def logout(request: Request, response: Response):
         secure=False,
     )
 
+
 @app.get("/auth/me", response_model=UserOutput)
 def me(user=Depends(current_user)):
     return user
+
+
+@app.get("/levels")
+def list_levels(user=Depends(current_user)):
+    """Return all 6 CEFR levels with total words and how many the user completed."""
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                w.cefr_level,
+                COUNT(w.id) AS total_words,
+                COUNT(uw.word_id) FILTER (WHERE uw.status IN ('known', 'mastered')) AS completed_words
+            FROM words w
+                     LEFT JOIN user_words uw
+                               ON uw.word_id = w.id AND uw.user_id = %s
+            GROUP BY w.cefr_level
+            """,
+            (user["id"],),
+        ).fetchall()
+
+    by_level = {row["cefr_level"]: row for row in rows}
+    return [
+        {
+            "level": lvl,
+            "total_words": by_level.get(lvl, {}).get("total_words", 0),
+            "completed_words": by_level.get(lvl, {}).get("completed_words", 0),
+        }
+        for lvl in VALID_LEVELS
+    ]
+
+
+@app.get("/levels/{level}/packs")
+def list_packs(level: str, user=Depends(current_user)):
+    """Return word packs in a level with per-pack progress bar counts."""
+    clean_level = validate_level(level)
+    with get_connection() as connection:
+        packs = connection.execute(
+            """
+            SELECT
+                w.pack_number,
+                COUNT(w.id) AS total_words,
+                COUNT(uw.word_id) FILTER (WHERE uw.status IN ('known', 'mastered')) AS completed_words,
+                COUNT(uw.word_id) FILTER (WHERE uw.status = 'learning') AS learning_words
+            FROM words w
+                     LEFT JOIN user_words uw
+                               ON uw.word_id = w.id AND uw.user_id = %s
+            WHERE w.cefr_level = %s
+            GROUP BY w.pack_number
+            ORDER BY w.pack_number
+            """,
+            (user["id"], clean_level),
+        ).fetchall()
+    return packs
+
+
+@app.get("/levels/{level}/packs/{pack_number}/words")
+def get_pack_words(level: str, pack_number: int, user=Depends(current_user)):
+    """Return all words in a specific pack along with this user's status on each word."""
+    clean_level = validate_level(level)
+    with get_connection() as connection:
+        words = connection.execute(
+            """
+            SELECT
+                w.id,
+                w.word,
+                w.cefr_level,
+                w.pack_number,
+                w.meaning_he,
+                w.example_sentence,
+                uw.status
+            FROM words w
+                     LEFT JOIN user_words uw
+                               ON uw.word_id = w.id AND uw.user_id = %s
+            WHERE w.cefr_level = %s AND w.pack_number = %s
+            ORDER BY w.id
+            """,
+            (user["id"], clean_level, pack_number),
+        ).fetchall()
+
+    if not words:
+        raise HTTPException(404, "Pack not found")
+    return words
+
+
+@app.post("/words/{word_id}/swipe")
+def swipe_word(word_id: int, payload: SwipeInput, user=Depends(current_user)):
+    """Record user's swipe decision: 'known' (left) or 'learning' (right)."""
+    with get_connection() as connection:
+        exists = connection.execute(
+            "SELECT id FROM words WHERE id = %s",
+            (word_id,),
+        ).fetchone()
+        if not exists:
+            raise HTTPException(404, "Word not found")
+
+        connection.execute(
+            """
+            INSERT INTO user_words (user_id, word_id, status, updated_at)
+            VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (user_id, word_id) DO UPDATE SET
+                status = EXCLUDED.status,
+                                                      updated_at = NOW()
+            """,
+            (user["id"], word_id, payload.status),
+        )
+    return {"word_id": word_id, "status": payload.status}

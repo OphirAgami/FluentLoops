@@ -1,11 +1,10 @@
 import random
 from database import get_connection, initialize_database
 
-# Pack size of 10 gives 3 clean packs per level for live demos (change to 100 for full dictionary)
+# 8 words per pack gives 3 equal packs in every CEFR level (change to 100 for a full dictionary)
 PACK_SIZE = 8
 SHUFFLE_SEED = 42
 
-# 24 curated words per CEFR level (sorted alphabetically before our deterministic shuffle)
 VOCAB_BY_LEVEL: dict[str, list[tuple[str, str, str]]] = {
     "A1": [
         ("afraid", "מפחד / חושש", "I am not afraid to ask questions in English."),
@@ -88,7 +87,7 @@ VOCAB_BY_LEVEL: dict[str, list[tuple[str, str, str]]] = {
     "B2": [
         ("acknowledge", "להכיר ב- / להודות", "It is smart to acknowledge trade-offs in your design."),
         ("ambiguous", "דו-משמעי / עמום", "When requirements are ambiguous, I ask clarifying questions."),
-        ("Bottleneck".lower(), "צוואר בקבוק", "Database queries can become a bottleneck without indexes."),
+        ("bottleneck", "צוואר בקבוק", "Database queries can become a bottleneck without indexes."),
         ("coherent", "קוהרנטי / ברור ורציף", "Practice helps you give coherent answers under pressure."),
         ("comprehensive", "מקיף", "We wrote a comprehensive plan before coding."),
         ("constraint", "אילוץ / מגבלה", "Time was our main constraint during the two-week sprint."),
@@ -103,7 +102,7 @@ VOCAB_BY_LEVEL: dict[str, list[tuple[str, str, str]]] = {
         ("justify", "להצדיק / לנמק", "Be ready to justify every architectural decision you made."),
         ("mitigate", "למתן / לצמצם סיכון", "Hashing session tokens helps mitigate database leaks."),
         ("obstacle", "מכשול", "Fear of making mistakes is the biggest obstacle to fluency."),
-        ("persistent", "מתמיד / עיקש (וגם נשמר בקביעות)", "PostgreSQL keeps user progress persistent across sessions."),
+        ("persistent", "מתמיד / נשמר בקביעות", "PostgreSQL keeps user progress persistent across sessions."),
         ("prerequisite", "תנאי קדם", "Past participle mastery is a prerequisite for present perfect."),
         ("resilient", "עמיד / חסין", "A resilient system handles unexpected errors gracefully."),
         ("retain", "לשמר / לזכור לאורך זמן", "Using a word in speech helps you retain it much longer."),
@@ -134,7 +133,7 @@ VOCAB_BY_LEVEL: dict[str, list[tuple[str, str, str]]] = {
         ("redundant", "מיותר / כפול", "Composite primary keys prevent redundant rows in the graph."),
         ("rigorous", "קפדני / יסודי", "Rigorous input validation keeps the API predictable."),
         ("scrutinize", "לבחון בדקדקנות", "Interviewers often scrutinize projects listed on a resume."),
-        ("Seamless".lower(), "חלק / ללא חיכוך", "We designed a seamless transition from swiping to speaking."),
+        ("seamless", "חלק / ללא חיכוך", "We designed a seamless transition from swiping to speaking."),
         ("substantiate", "לבסס / לגבות בהוכחות", "Metrics in the dashboard substantiate the learner's progress."),
     ],
     "C2": [
@@ -165,148 +164,116 @@ VOCAB_BY_LEVEL: dict[str, list[tuple[str, str, str]]] = {
     ],
 }
 
-# 10 interconnected grammar skills (Nodes in our Skill Graph)
-# Tuple: (code, name, cefr_level, severity, meaning_he, example_sentence)
-GRAMMAR_SKILLS: list[tuple[str, str, str, int, str, str]] = [
+# 10 standalone grammar rules (name, cefr_level, severity, explanation_he, example, standalone followup_prompt)
+GRAMMAR_RULES: list[tuple[str, str, int, str, str, str]] = [
     (
-        "grammar_be_present",
         "Verb 'to be' (am / is / are)",
         "A1",
         3,
         "התאמת am / is / are לגוף במשפט בהווה",
         "She is confident, and they are ready for the interview.",
+        "Describe how you and a friend feel today using am, is, or are.",
     ),
     (
-        "grammar_present_simple",
         "Present Simple & 3rd-Person -s",
         "A1",
         3,
         "הווה פשוט ותוספת s לפועל בגוף שלישי יחיד (he / she / it)",
         "He practices English every morning and writes clean code.",
+        "Describe one daily habit of a friend or family member (remember he/she + verb-s).",
     ),
     (
-        "grammar_articles",
         "Articles (a / an / the)",
         "A2",
         2,
         "שימוש נכון ב-a לפני עיצור, an לפני תנועה, ו-the לדבר ספציפי",
         "It was an exciting opportunity to join the engineering team.",
+        "Describe an object on your desk right now using a, an, and the.",
     ),
     (
-        "grammar_prepositions",
         "Prepositions (in / on / at / to)",
         "A2",
         2,
         "מילות יחס נכונות לזמן, מקום ופעלים נפוצים",
         "I arrived at the office on Monday morning.",
+        "Say one sentence about when and where you usually study (use in, on, or at).",
     ),
     (
-        "grammar_past_simple",
         "Past Simple & Irregular Verbs",
         "A2",
         3,
         "עבר פשוט ופעלים יוצאי דופן (למשל went במקום goed)",
         "Yesterday I went over my notes and solved two bugs.",
+        "Tell me one thing you did yesterday using the Past Simple.",
     ),
     (
-        "grammar_modals",
         "Modal Verbs (can / should / would)",
         "B1",
         2,
         "אחרי פועל עזר (can / should / would) הפועל תמיד בצורת הבסיס בלי to ובלי s",
         "You should focus on clarity when explaining your code.",
+        "Give one short tip to a new student using 'should' or 'can'.",
     ),
     (
-        "grammar_past_participle",
         "Past Participle Forms (V3)",
         "B1",
         2,
         "הצורה השלישית של הפועל (gone, written, taken) כבסיס לזמנים מתקדמים",
         "I have taken several courses in algorithms.",
+        "Mention a movie you have seen or a book you have read recently (have + V3).",
     ),
     (
-        "grammar_present_perfect",
         "Present Perfect (have / has + V3)",
         "B1",
         3,
         "חיבור פעולה מהעבר להווה בעזרת have/has + צורה שלישית (V3)",
         "I have built a full-stack application with FastAPI.",
+        "Share one skill or project you have worked on this year (use have/has + V3).",
     ),
     (
-        "grammar_passive_voice",
         "Passive Voice (be + V3)",
         "B2",
         2,
         "משפט סביל: שימוש בפועל be מותאם לזמן + צורה שלישית (V3)",
         "User progress is stored securely in PostgreSQL.",
+        "Explain in one sentence how data or messages are handled in an app (use Passive Voice).",
     ),
     (
-        "grammar_conditionals",
         "Conditionals (If + Past / would)",
         "B2",
         3,
         "משפטי תנאי היפותטיים: If + עבר פשוט בחלק הראשון, ו-would בחלק השני",
         "If I had more time, I would add automated voice scoring.",
+        "Answer in one sentence: If you had a free week with no obligations, what would you do?",
     ),
 ]
 
-# Directed edges (child_skill_code, prerequisite_skill_code)
-# Meaning: to master child_skill, learner must first understand prerequisite_skill
+# Directed edges in our Grammar Skill Graph: (advanced_rule_name, prerequisite_rule_name)
 GRAMMAR_PREREQUISITES: list[tuple[str, str]] = [
-    ("grammar_present_simple", "grammar_be_present"),
-    ("grammar_past_simple", "grammar_present_simple"),
-    ("grammar_modals", "grammar_present_simple"),
-    ("grammar_past_participle", "grammar_past_simple"),
-    ("grammar_present_perfect", "grammar_past_participle"),
-    ("grammar_passive_voice", "grammar_be_present"),
-    ("grammar_passive_voice", "grammar_past_participle"),
-    ("grammar_conditionals", "grammar_past_simple"),
-    ("grammar_conditionals", "grammar_modals"),
-]
-
-# Speaking prompts tailored by goal and optional grammar target ({word} gets filled dynamically)
-SPEAKING_PROMPTS: list[tuple[str, str, str | None, str]] = [
-    # General / Daily goals
-    ("A1", "daily", None, "Say one simple sentence about your day using the word '{word}'."),
-    ("A2", "daily", None, "Tell me about something in your routine using the word '{word}'."),
-    ("B1", "daily", None, "Share a short personal example from real life using '{word}'."),
-    ("B2", "daily", None, "Explain your opinion on a daily habit while naturally using '{word}'."),
-    ("C1", "daily", None, "Reflect on a personal experience in 1-2 sentences using '{word}'."),
-    ("C2", "daily", None, "Formulate a nuanced observation about everyday life using '{word}'."),
-    # Job Interview goals
-    ("A1", "interviews", None, "Introduce something about your studies or work using '{word}'."),
-    ("A2", "interviews", None, "Tell an interviewer one sentence about yourself using '{word}'."),
-    ("B1", "interviews", None, "Answer an interviewer: how does '{word}' relate to working on a project?"),
-    ("B2", "interviews", None, "In a job interview, explain a technical decision you made using '{word}'."),
-    ("C1", "interviews", None, "Pitch a strength or engineering lesson to an interviewer using '{word}'."),
-    ("C2", "interviews", None, "Articulate an architectural trade-off in an interview using '{word}'."),
-    # Academic / Studies goals
-    ("A1", "academic", None, "Say one short sentence about studying or classes using '{word}'."),
-    ("A2", "academic", None, "Describe a course or homework task using the word '{word}'."),
-    ("B1", "academic", None, "Explain how '{word}' connects to learning computer science."),
-    ("B2", "academic", None, "Summarize an idea from university or research using '{word}'."),
-    ("C1", "academic", None, "Present an analytical point as if in a seminar using '{word}'."),
-    ("C2", "academic", None, "Synthesize a formal academic argument in one sentence using '{word}'."),
-    # Targeted Grammar Follow-up Prompts (used by Adaptive Priority Queue!)
-    ("A1", "general", "grammar_be_present", "Use '{word}' in a present-tense sentence with am, is, or are."),
-    ("A1", "general", "grammar_present_simple", "Describe what a teammate or friend regularly does, using '{word}' (watch the -s ending!)."),
-    ("A2", "general", "grammar_articles", "Say a sentence with '{word}' and pay close attention to a, an, and the."),
-    ("A2", "general", "grammar_prepositions", "Describe when or where something happened using '{word}' (check in / on / at)."),
-    ("A2", "general", "grammar_past_simple", "Tell me about something that happened last week using '{word}' in the Past Simple."),
-    ("B1", "general", "grammar_modals", "Give a piece of advice using 'should' or 'can' together with '{word}'."),
-    ("B1", "general", "grammar_past_participle", "Use have/has with a correct V3 verb form in a sentence that includes '{word}'."),
-    ("B1", "general", "grammar_present_perfect", "Share something you have done recently (have/has + V3) while using '{word}'."),
-    ("B2", "general", "grammar_passive_voice", "Describe how something is built or handled (Passive Voice) using '{word}'."),
-    ("B2", "general", "grammar_conditionals", "Start with 'If I...' to describe a hypothetical situation using '{word}'."),
+    ("Present Simple & 3rd-Person -s", "Verb 'to be' (am / is / are)"),
+    ("Past Simple & Irregular Verbs", "Present Simple & 3rd-Person -s"),
+    ("Modal Verbs (can / should / would)", "Present Simple & 3rd-Person -s"),
+    ("Past Participle Forms (V3)", "Past Simple & Irregular Verbs"),
+    ("Present Perfect (have / has + V3)", "Past Participle Forms (V3)"),
+    ("Passive Voice (be + V3)", "Verb 'to be' (am / is / are)"),
+    ("Passive Voice (be + V3)", "Past Participle Forms (V3)"),
+    ("Conditionals (If + Past / would)", "Past Simple & Irregular Verbs"),
+    ("Conditionals (If + Past / would)", "Modal Verbs (can / should / would)"),
 ]
 
 
 def seed_all() -> None:
+    with get_connection() as conn:
+        # Clean up yesterday's old hybrid tables if they still exist on disk
+        conn.execute(
+            "DROP TABLE IF EXISTS practice_prompts, user_skills, skill_prerequisites, skills CASCADE"
+        )
+        conn.execute("ALTER TABLE IF EXISTS user_grammar_stats DROP COLUMN IF EXISTS last_word_id")
+
     initialize_database()
 
     with get_connection() as conn:
-        # 1. Insert vocabulary words (deterministically shuffled per level to prevent lexical interference)
-        vocab_count = 0
+        # 1. Seed shuffled vocabulary packs per CEFR level
         for level, words in VOCAB_BY_LEVEL.items():
             sorted_words = sorted(words, key=lambda item: item[0])
             rng = random.Random(f"{SHUFFLE_SEED}_{level}")
@@ -314,65 +281,50 @@ def seed_all() -> None:
 
             for index, (word, meaning_he, example) in enumerate(sorted_words):
                 pack_number = (index // PACK_SIZE) + 1
-                code = f"vocab_{level.lower()}_{word.replace('-', '_')}"
                 conn.execute(
                     """
-                    INSERT INTO skills (code, name, skill_type, cefr_level, pack_number, meaning_he, example_sentence, severity)
-                    VALUES (%s, %s, 'vocab', %s, %s, %s, %s, 1)
-                        ON CONFLICT (code) DO UPDATE SET
+                    INSERT INTO words (word, cefr_level, pack_number, meaning_he, example_sentence)
+                    VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (cefr_level, word) DO UPDATE SET
                         pack_number = EXCLUDED.pack_number,
-                                                  meaning_he = EXCLUDED.meaning_he,
-                                                  example_sentence = EXCLUDED.example_sentence
+                        meaning_he = EXCLUDED.meaning_he,
+                        example_sentence = EXCLUDED.example_sentence
                     """,
-                    (code, word, level, pack_number, meaning_he, example),
+                    (word, level, pack_number, meaning_he, example),
                 )
-                vocab_count += 1
 
-        # 2. Insert grammar nodes
-        for code, name, level, severity, meaning_he, example in GRAMMAR_SKILLS:
+        # 2. Seed standalone grammar rules
+        for name, level, severity, explanation_he, example, followup_prompt in GRAMMAR_RULES:
             conn.execute(
                 """
-                INSERT INTO skills (code, name, skill_type, cefr_level, pack_number, meaning_he, example_sentence, severity)
-                VALUES (%s, %s, 'grammar', %s, NULL, %s, %s, %s)
-                    ON CONFLICT (code) DO UPDATE SET
-                    name = EXCLUDED.name,
-                                              cefr_level = EXCLUDED.cefr_level,
-                                              meaning_he = EXCLUDED.meaning_he,
-                                              example_sentence = EXCLUDED.example_sentence,
-                                              severity = EXCLUDED.severity
+                INSERT INTO grammar_rules (name, cefr_level, severity, explanation_he, example_sentence, followup_prompt)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (name) DO UPDATE SET
+                    cefr_level = EXCLUDED.cefr_level,
+                    severity = EXCLUDED.severity,
+                    explanation_he = EXCLUDED.explanation_he,
+                    example_sentence = EXCLUDED.example_sentence,
+                    followup_prompt = EXCLUDED.followup_prompt
                 """,
-                (code, name, level, meaning_he, example, severity),
+                (name, level, severity, explanation_he, example, followup_prompt),
             )
 
-        # 3. Insert Skill Graph edges (prerequisite relationships)
-        for child_code, prereq_code in GRAMMAR_PREREQUISITES:
+        # 3. Seed grammar prerequisite edges (DAG)
+        for rule_name, prereq_name in GRAMMAR_PREREQUISITES:
             conn.execute(
                 """
-                INSERT INTO skill_prerequisites (skill_id, prerequisite_skill_id)
-                SELECT child.id, prereq.id
-                FROM skills AS child, skills AS prereq
-                WHERE child.code = %s AND prereq.code = %s
+                INSERT INTO grammar_prerequisites (rule_id, prerequisite_rule_id)
+                SELECT r.id, p.id
+                FROM grammar_rules AS r, grammar_rules AS p
+                WHERE r.name = %s AND p.name = %s
                     ON CONFLICT DO NOTHING
                 """,
-                (child_code, prereq_code),
-            )
-
-        # 4. Refresh speaking prompt templates cleanly
-        conn.execute("DELETE FROM practice_prompts")
-        for level, goal, grammar_code, template in SPEAKING_PROMPTS:
-            conn.execute(
-                """
-                INSERT INTO practice_prompts (cefr_level, learning_goal, grammar_skill_code, prompt_template)
-                VALUES (%s, %s, %s, %s)
-                """,
-                (level, goal, grammar_code, template),
+                (rule_name, prereq_name),
             )
 
     print(
-        f"Seed complete: {vocab_count} vocab words across A1-C2, "
-        f"{len(GRAMMAR_SKILLS)} grammar skills, "
-        f"{len(GRAMMAR_PREREQUISITES)} graph edges, "
-        f"and {len(SPEAKING_PROMPTS)} speaking prompts!"
+        f"Clean schema seeded: 144 words across A1-C2 ({PACK_SIZE} per pack), "
+        f"{len(GRAMMAR_RULES)} grammar rules, and {len(GRAMMAR_PREREQUISITES)} graph edges!"
     )
 
 
